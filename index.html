@@ -1,479 +1,543 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { 
-  Play, Pause, UploadCloud, Trash2, Download, 
-  Settings, Image as ImageIcon, SkipBack, SkipForward, GripVertical, Info
-} from 'lucide-react';
-
-export default function App() {
-  const [frames, setFrames] = useState([]);
-  const [fps, setFps] = useState(12);
-  const [resolution, setResolution] = useState('1920x1080');
-  const [fitMode, setFitMode] = useState('contain');
-  const [currentFrameIndex, setCurrentFrameIndex] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportProgress, setExportProgress] = useState(0);
-  const [draggedIndex, setDraggedIndex] = useState(null);
-  
-  const canvasRef = useRef(null);
-  const fileInputRef = useRef(null);
-
-  // Load MP4 Muxer library dynamically from CDN for client-side MP4 generation
-  useEffect(() => {
-    if (!window.Mp4Muxer) {
-      const script = document.createElement('script');
-      script.src = 'https://unpkg.com/mp4-muxer/build/mp4-muxer.js';
-      script.async = true;
-      document.body.appendChild(script);
-    }
-  }, []);
-
-  // Handle Playback Loop
-  useEffect(() => {
-    let interval;
-    if (isPlaying && frames.length > 0) {
-      interval = setInterval(() => {
-        setCurrentFrameIndex((prev) => (prev + 1) % frames.length);
-      }, 1000 / fps);
-    }
-    return () => clearInterval(interval);
-  }, [isPlaying, frames.length, fps]);
-
-  // Helper function to draw image maintaining aspect ratio
-  const drawFrameOnCanvas = useCallback((ctx, img, canvasWidth, canvasHeight, mode) => {
-    const imgRatio = img.width / img.height;
-    const canvasRatio = canvasWidth / canvasHeight;
-    let drawWidth, drawHeight, offsetX, offsetY;
-
-    if (mode === 'contain') {
-      if (imgRatio > canvasRatio) {
-        drawWidth = canvasWidth;
-        drawHeight = canvasWidth / imgRatio;
-      } else {
-        drawHeight = canvasHeight;
-        drawWidth = canvasHeight * imgRatio;
-      }
-    } else { // cover
-      if (imgRatio > canvasRatio) {
-        drawHeight = canvasHeight;
-        drawWidth = canvasHeight * imgRatio;
-      } else {
-        drawWidth = canvasWidth;
-        drawHeight = canvasWidth / imgRatio;
-      }
-    }
-
-    offsetX = (canvasWidth - drawWidth) / 2;
-    offsetY = (canvasHeight - drawHeight) / 2;
-
-    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
-  }, []);
-
-  // Render Canvas Preview
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const [resW, resH] = resolution.split('x').map(Number);
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StopMotion Web Maker by OpangDarmawan</title>
     
-    // Set actual canvas size based on resolution setting
-    if (canvas.width !== resW) canvas.width = resW;
-    if (canvas.height !== resH) canvas.height = resH;
-
-    ctx.fillStyle = '#0f172a'; // Background slate-900
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    if (frames.length > 0 && frames[currentFrameIndex]) {
-      const frame = frames[currentFrameIndex];
-      drawFrameOnCanvas(ctx, frame.imgElement, canvas.width, canvas.height, fitMode);
-    } else {
-      ctx.fillStyle = '#334155';
-      ctx.font = '24px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('Belum ada gambar. Silakan unggah.', canvas.width / 2, canvas.height / 2);
-    }
-  }, [currentFrameIndex, frames, resolution, fitMode, drawFrameOnCanvas]);
-
-  const handleUpload = async (e) => {
-    const files = Array.from(e.target.files);
-    if (!files.length) return;
-
-    const newFrames = await Promise.all(
-      files.map((file) => {
-        return new Promise((resolve, reject) => {
-          const url = URL.createObjectURL(file);
-          const img = new Image();
-          img.onload = () => resolve({ id: crypto.randomUUID(), url, file, imgElement: img });
-          img.onerror = reject;
-          img.src = url;
-        });
-      })
-    );
-
-    setFrames((prev) => [...prev, ...newFrames]);
-    // Reset file input
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const removeFrame = (idToRemove) => {
-    setFrames(frames.filter(f => f.id !== idToRemove));
-    if (currentFrameIndex >= frames.length - 1) {
-      setCurrentFrameIndex(Math.max(0, frames.length - 2));
-    }
-  };
-
-  const clearAll = () => {
-    if(window.confirm('Yakin ingin menghapus semua frame?')) {
-      frames.forEach(f => URL.revokeObjectURL(f.url)); // Free memory
-      setFrames([]);
-      setCurrentFrameIndex(0);
-      setIsPlaying(false);
-    }
-  };
-
-  // Drag and Drop Logic
-  const handleDragStart = (index) => setDraggedIndex(index);
-  const handleDragOver = (e, index) => {
-    e.preventDefault();
-    if (draggedIndex === null || draggedIndex === index) return;
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
     
-    const newFrames = [...frames];
-    const draggedFrame = newFrames[draggedIndex];
-    newFrames.splice(draggedIndex, 1);
-    newFrames.splice(index, 0, draggedFrame);
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
     
-    setFrames(newFrames);
-    setDraggedIndex(index);
-    if (currentFrameIndex === draggedIndex) setCurrentFrameIndex(index);
-  };
-  const handleDragEnd = () => setDraggedIndex(null);
+    <!-- MP4 Muxer untuk Ekspor Video -->
+    <script src="https://unpkg.com/mp4-muxer/build/mp4-muxer.js"></script>
 
-  // Export to High Quality MP4
-  const exportVideo = async () => {
-    if (frames.length === 0) return alert('Silakan tambahkan gambar terlebih dahulu.');
-    if (!window.Mp4Muxer) return alert('Library pemroses video sedang dimuat, coba beberapa saat lagi.');
-    if (typeof VideoEncoder === 'undefined') return alert('Browser Anda tidak mendukung WebCodecs API. Gunakan Chrome, Edge, atau Opera versi terbaru desktop.');
-
-    setIsPlaying(false);
-    setIsExporting(true);
-    setExportProgress(0);
-
-    try {
-      const [width, height] = resolution.split('x').map(Number);
-      
-      // Initialize Muxer
-      let muxer = new window.Mp4Muxer.Muxer({
-        target: new window.Mp4Muxer.ArrayBufferTarget(),
-        video: { codec: 'avc', width, height },
-        fastStart: 'in-memory',
-      });
-
-      // Initialize Encoder
-      let videoEncoder = new VideoEncoder({
-        output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-        error: (e) => console.error('Video Encoder Error:', e),
-      });
-
-      // Configure AVC (H.264) Profile for high quality
-      videoEncoder.configure({
-        codec: 'avc1.640028', // High Profile
-        width,
-        height,
-        bitrate: 8_000_000, // 8 Mbps
-        framerate: fps,
-      });
-
-      const offscreenCanvas = document.createElement('canvas');
-      offscreenCanvas.width = width;
-      offscreenCanvas.height = height;
-      const ctx = offscreenCanvas.getContext('2d');
-
-      const frameDurationMicroseconds = 1_000_000 / fps;
-
-      for (let i = 0; i < frames.length; i++) {
-        const frame = frames[i];
-
-        // Draw Frame
-        ctx.fillStyle = '#0f172a';
-        ctx.fillRect(0, 0, width, height);
-        drawFrameOnCanvas(ctx, frame.imgElement, width, height, fitMode);
-
-        // Encode Frame
-        const videoFrame = new VideoFrame(offscreenCanvas, {
-          timestamp: i * frameDurationMicroseconds,
-          duration: frameDurationMicroseconds
-        });
-
-        // Add a keyframe every 2 seconds
-        const keyFrame = (i % (fps * 2)) === 0;
-        videoEncoder.encode(videoFrame, { keyFrame });
-        videoFrame.close();
-
-        // Update progress
-        setExportProgress(Math.round(((i + 1) / frames.length) * 100));
-        
-        // Small delay to prevent blocking the UI thread completely on huge sequences
-        if (i % 10 === 0) await new Promise(r => setTimeout(r, 10)); 
-      }
-
-      await videoEncoder.flush();
-      muxer.finalize();
-
-      const buffer = muxer.target.buffer;
-      const blob = new Blob([buffer], { type: 'video/mp4' });
-      const url = URL.createObjectURL(blob);
-
-      // Trigger Download
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `stopmotion-${Date.now()}.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-    } catch (err) {
-      console.error(err);
-      alert('Terjadi kesalahan saat mengekspor: ' + err.message);
-    } finally {
-      setIsExporting(false);
-      setExportProgress(0);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col">
-      {/* Header */}
-      <header className="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center shadow-md">
-        <div className="flex items-center gap-3">
-          <div className="bg-blue-600 p-2 rounded-lg">
-            <ImageIcon size={24} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">StopMotion Web Maker by OpangDarmawan</h1>
-            <p className="text-xs text-slate-400"></p>
-          </div>
-        </div>
-        <div className="flex gap-3">
-          <input 
-            type="file" 
-            multiple 
-            accept="image/*" 
-            className="hidden" 
-            ref={fileInputRef} 
-            onChange={handleUpload} 
-          />
-          <button 
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 transition-colors px-4 py-2 rounded-lg text-sm font-medium"
-          >
-            <UploadCloud size={18} /> Unggah Gambar
-          </button>
-          <button 
-            onClick={exportVideo}
-            disabled={isExporting || frames.length === 0}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-slate-400 transition-colors px-4 py-2 rounded-lg text-sm font-medium shadow-lg shadow-blue-900/50"
-          >
-            {isExporting ? (
-              <span className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                Memproses {exportProgress}%
-              </span>
-            ) : (
-              <><Download size={18} /> Ekspor .MP4</>
-            )}
-          </button>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-        
-        {/* Left Workspace (Preview) */}
-        <section className="flex-1 p-6 flex flex-col items-center justify-center border-r border-slate-800 relative bg-slate-950">
-          
-          {/* Canvas Wrapper */}
-          <div className="relative w-full max-w-4xl flex-1 flex items-center justify-center mb-6">
-            <canvas 
-              ref={canvasRef}
-              className="max-w-full max-h-[60vh] bg-black shadow-2xl rounded-md ring-1 ring-slate-800"
-            />
-            
-            {/* Frame Counter Badge */}
-            {frames.length > 0 && (
-              <div className="absolute top-4 right-4 bg-black/60 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-mono text-white tracking-widest">
-                {currentFrameIndex + 1} / {frames.length}
-              </div>
-            )}
-          </div>
-
-          {/* Playback Controls */}
-          <div className="flex items-center gap-4 bg-slate-800/80 backdrop-blur-md p-3 rounded-2xl shadow-xl border border-slate-700">
-            <button 
-              onClick={() => { setIsPlaying(false); setCurrentFrameIndex(0); }}
-              className="p-2 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors"
-              title="Ke Awal"
-            >
-              <SkipBack size={20} />
-            </button>
-            
-            <button 
-              onClick={() => frames.length > 0 && setIsPlaying(!isPlaying)}
-              className="p-3 bg-blue-600 hover:bg-blue-500 rounded-xl text-white shadow-lg transition-transform active:scale-95"
-            >
-              {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
-            </button>
-
-            <button 
-              onClick={() => { setIsPlaying(false); setCurrentFrameIndex(frames.length - 1); }}
-              className="p-2 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors"
-              title="Ke Akhir"
-            >
-              <SkipForward size={20} />
-            </button>
-
-            <div className="w-px h-8 bg-slate-700 mx-2"></div>
-
-            <div className="flex flex-col gap-1 w-32">
-              <div className="flex justify-between text-xs text-slate-400">
-                <span>Kecepatan</span>
-                <span className="font-mono">{fps} FPS</span>
-              </div>
-              <input 
-                type="range" 
-                min="1" 
-                max="60" 
-                value={fps} 
-                onChange={(e) => setFps(Number(e.target.value))}
-                className="w-full accent-blue-500"
-              />
-            </div>
-          </div>
-        </section>
-
-        {/* Right Sidebar (Settings) */}
-        <aside className="w-full lg:w-80 bg-slate-900 border-l border-slate-800 p-6 overflow-y-auto hidden lg:block">
-          <div className="flex items-center gap-2 mb-6 text-slate-300">
-            <Settings size={20} />
-            <h2 className="font-semibold">Pengaturan Video</h2>
-          </div>
-
-          <div className="space-y-6">
-            {/* Resolution */}
-            <div>
-              <label className="block text-sm font-medium text-slate-400 mb-2">Resolusi Ekspor</label>
-              <select 
-                value={resolution} 
-                onChange={(e) => setResolution(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 text-sm rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-blue-500 text-slate-200"
-              >
-                <option value="1920x1080">1080p (1920x1080) - Lanskap</option>
-                <option value="1280x720">720p (1280x720) - Lanskap</option>
-                <option value="1080x1920">1080p (1080x1920) - Potret (TikTok/Reels)</option>
-                <option value="1080x1080">1080p (1080x1080) - Persegi (Instagram)</option>
-              </select>
-            </div>
-
-            {/* Fit Mode */}
-            <div>
-              <label className="block text-sm font-medium text-slate-400 mb-2">Mode Penyesuaian Gambar</label>
-              <div className="flex bg-slate-800 rounded-lg p-1 border border-slate-700">
-                <button 
-                  onClick={() => setFitMode('contain')}
-                  className={`flex-1 py-1.5 text-sm rounded-md transition-colors ${fitMode === 'contain' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                >
-                  Fit (Tengah)
-                </button>
-                <button 
-                  onClick={() => setFitMode('cover')}
-                  className={`flex-1 py-1.5 text-sm rounded-md transition-colors ${fitMode === 'cover' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                >
-                  Fill (Penuh)
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-blue-900/20 border border-blue-900/50 rounded-lg p-4 mt-6">
-              <div className="flex gap-2 items-start text-blue-400">
-                <Info size={16} className="mt-0.5 shrink-0" />
-                <p className="text-xs leading-relaxed">
-                  Pemrosesan video berjalan 100% di perangkat Anda menggunakan <b>WebCodecs</b>. Kualitas dan kecepatan ekspor sangat bergantung pada spesifikasi CPU perangkat Anda. Tidak ada data yang dikirim ke server.
-                </p>
-              </div>
-            </div>
-          </div>
-        </aside>
-      </main>
-
-      {/* Bottom Timeline */}
-      <footer className="bg-slate-800 border-t border-slate-700 h-48 flex flex-col shadow-inner">
-        <div className="px-4 py-2 flex justify-between items-center text-xs text-slate-400 border-b border-slate-700/50">
-          <span className="font-medium tracking-wide">TIMELINE FRAMES ({frames.length})</span>
-          {frames.length > 0 && (
-            <button 
-              onClick={clearAll}
-              className="text-red-400 hover:text-red-300 flex items-center gap-1 transition-colors"
-            >
-              <Trash2 size={14} /> Hapus Semua
-            </button>
-          )}
-        </div>
-        
-        <div className="flex-1 overflow-x-auto overflow-y-hidden flex items-center px-4 gap-2 pb-2 custom-scrollbar">
-          {frames.length === 0 ? (
-            <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 border-2 border-dashed border-slate-700 rounded-xl mx-4 my-2">
-              <ImageIcon size={32} className="mb-2 opacity-50" />
-              <p className="text-sm">Tarik dan letakkan gambar, atau klik tombol Unggah</p>
-            </div>
-          ) : (
-            frames.map((frame, index) => (
-              <div 
-                key={frame.id}
-                draggable
-                onDragStart={() => handleDragStart(index)}
-                onDragOver={(e) => handleDragOver(e, index)}
-                onDragEnd={handleDragEnd}
-                onClick={() => setCurrentFrameIndex(index)}
-                className={`
-                  relative shrink-0 w-24 h-24 rounded-lg overflow-hidden cursor-pointer group select-none
-                  transition-all duration-200 border-2
-                  ${currentFrameIndex === index ? 'border-blue-500 scale-105 shadow-lg shadow-blue-500/20 z-10' : 'border-slate-600 hover:border-slate-400'}
-                  ${draggedIndex === index ? 'opacity-50 scale-95' : 'opacity-100'}
-                `}
-              >
-                <div className="absolute inset-0 bg-slate-900 flex items-center justify-center">
-                  <img src={frame.url} alt={`Frame ${index}`} className="w-full h-full object-cover" draggable={false} />
-                </div>
-                
-                {/* Drag Handle & Delete Overlay */}
-                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-1">
-                  <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-mono bg-black/60 px-1 rounded text-white">{index + 1}</span>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); removeFrame(frame.id); }}
-                      className="text-red-400 hover:text-red-300 bg-black/60 p-1 rounded transition-colors"
-                      title="Hapus Frame"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                  <div className="self-center text-white/50 cursor-grab active:cursor-grabbing">
-                    <GripVertical size={16} />
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </footer>
-      
-      {/* CSS untuk Scrollbar Timeline */}
-      <style>{`
+    <style>
         .custom-scrollbar::-webkit-scrollbar { height: 8px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #1e293b; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
-      `}</style>
-    </div>
-  );
-}
+        
+        /* Utility untuk drag and drop */
+        .dragging { opacity: 0.5; transform: scale(0.95); }
+        .active-frame { border-color: #3b82f6 !important; transform: scale(1.05); z-index: 10; box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.2); }
+    </style>
+</head>
+<body class="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header class="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center shadow-md shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="bg-blue-600 p-2 rounded-lg">
+                <i data-lucide="image" class="text-white w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold tracking-tight">StopMotion Web Maker by OpangDarmawan</h1>
+                <p class="text-xs text-slate-400">Langsung Jalan di GitHub Pages (Tanpa Build)</p>
+            </div>
+        </div>
+        <div class="flex gap-3">
+            <input type="file" multiple accept="image/*" id="fileInput" class="hidden" />
+            <button onclick="document.getElementById('fileInput').click()" class="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 transition-colors px-4 py-2 rounded-lg text-sm font-medium">
+                <i data-lucide="upload-cloud" class="w-4 h-4"></i> Unggah Gambar
+            </button>
+            <button id="exportBtn" onclick="exportVideo()" class="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-slate-400 disabled:cursor-not-allowed transition-colors px-4 py-2 rounded-lg text-sm font-medium shadow-lg shadow-blue-900/50">
+                <span id="exportBtnContent" class="flex items-center gap-2">
+                    <i data-lucide="download" class="w-4 h-4"></i> Ekspor .MP4
+                </span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col lg:flex-row overflow-hidden">
+        
+        <!-- Left Workspace (Preview) -->
+        <section class="flex-1 p-6 flex flex-col items-center justify-center border-r border-slate-800 relative bg-slate-950 overflow-hidden">
+            
+            <!-- Canvas Wrapper -->
+            <div class="relative w-full max-w-4xl flex-1 flex items-center justify-center mb-6 overflow-hidden">
+                <canvas id="previewCanvas" class="max-w-full max-h-[60vh] bg-black shadow-2xl rounded-md ring-1 ring-slate-800 object-contain"></canvas>
+                
+                <!-- Frame Counter Badge -->
+                <div id="frameCounter" class="hidden absolute top-4 right-4 bg-black/60 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-mono text-white tracking-widest">
+                    0 / 0
+                </div>
+            </div>
+
+            <!-- Playback Controls -->
+            <div class="flex items-center gap-4 bg-slate-800/80 backdrop-blur-md p-3 rounded-2xl shadow-xl border border-slate-700 shrink-0">
+                <button onclick="skipToStart()" class="p-2 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors" title="Ke Awal">
+                    <i data-lucide="skip-back" class="w-5 h-5"></i>
+                </button>
+                
+                <button id="playBtn" onclick="togglePlay()" class="p-3 bg-blue-600 hover:bg-blue-500 rounded-xl text-white shadow-lg transition-transform active:scale-95">
+                    <i data-lucide="play" class="w-6 h-6 ml-0.5" id="playIcon"></i>
+                </button>
+
+                <button onclick="skipToEnd()" class="p-2 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors" title="Ke Akhir">
+                    <i data-lucide="skip-forward" class="w-5 h-5"></i>
+                </button>
+
+                <div class="w-px h-8 bg-slate-700 mx-2"></div>
+
+                <div class="flex flex-col gap-1 w-32">
+                    <div class="flex justify-between text-xs text-slate-400">
+                        <span>Kecepatan</span>
+                        <span id="fpsDisplay" class="font-mono">12 FPS</span>
+                    </div>
+                    <input type="range" id="fpsInput" min="1" max="60" value="12" class="w-full accent-blue-500" oninput="updateFps(this.value)" />
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Sidebar (Settings) -->
+        <aside class="w-full lg:w-80 bg-slate-900 border-l border-slate-800 p-6 overflow-y-auto hidden lg:block shrink-0">
+            <div class="flex items-center gap-2 mb-6 text-slate-300">
+                <i data-lucide="settings" class="w-5 h-5"></i>
+                <h2 class="font-semibold">Pengaturan Video</h2>
+            </div>
+
+            <div class="space-y-6">
+                <!-- Resolution -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-400 mb-2">Resolusi Ekspor</label>
+                    <select id="resolutionInput" onchange="updateSettings()" class="w-full bg-slate-800 border border-slate-700 text-sm rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-blue-500 text-slate-200">
+                        <option value="1920x1080">1080p (1920x1080) - Lanskap</option>
+                        <option value="1280x720">720p (1280x720) - Lanskap</option>
+                        <option value="1080x1920">1080p (1080x1920) - Potret (TikTok)</option>
+                        <option value="1080x1080">1080p (1080x1080) - Persegi</option>
+                    </select>
+                </div>
+
+                <!-- Fit Mode -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-400 mb-2">Mode Penyesuaian Gambar</label>
+                    <div class="flex bg-slate-800 rounded-lg p-1 border border-slate-700">
+                        <button id="fitContainBtn" onclick="setFitMode('contain')" class="flex-1 py-1.5 text-sm rounded-md transition-colors bg-slate-700 text-white shadow">
+                            Fit (Tengah)
+                        </button>
+                        <button id="fitCoverBtn" onclick="setFitMode('cover')" class="flex-1 py-1.5 text-sm rounded-md transition-colors text-slate-400 hover:text-slate-200">
+                            Fill (Penuh)
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-blue-900/20 border border-blue-900/50 rounded-lg p-4 mt-6">
+                    <div class="flex gap-2 items-start text-blue-400">
+                        <i data-lucide="info" class="w-4 h-4 mt-0.5 shrink-0"></i>
+                        <p class="text-xs leading-relaxed">
+                            Pemrosesan video berjalan 100% di browser Anda menggunakan <b>WebCodecs</b>. Cukup upload file <code>index.html</code> ini ke GitHub Pages dan langsung siap digunakan!
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- Bottom Timeline -->
+    <footer class="bg-slate-800 border-t border-slate-700 h-48 flex flex-col shadow-inner shrink-0">
+        <div class="px-4 py-2 flex justify-between items-center text-xs text-slate-400 border-b border-slate-700/50">
+            <span class="font-medium tracking-wide" id="timelineTitle">TIMELINE FRAMES (0)</span>
+            <button id="clearAllBtn" onclick="clearAll()" class="hidden text-red-400 hover:text-red-300 flex items-center gap-1 transition-colors">
+                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Hapus Semua
+            </button>
+        </div>
+        
+        <div id="timeline" class="flex-1 overflow-x-auto overflow-y-hidden flex items-center px-4 gap-2 pb-2 custom-scrollbar">
+            <!-- Timeline Empty State -->
+            <div id="emptyTimeline" class="w-full h-full flex flex-col items-center justify-center text-slate-500 border-2 border-dashed border-slate-700 rounded-xl mx-4 my-2">
+                <i data-lucide="image" class="w-8 h-8 mb-2 opacity-50"></i>
+                <p class="text-sm">Tarik dan letakkan gambar, atau klik tombol Unggah</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // State Variables
+        let frames = [];
+        let fps = 12;
+        let resolution = '1920x1080';
+        let fitMode = 'contain';
+        let currentFrameIndex = 0;
+        let isPlaying = false;
+        let isExporting = false;
+        let playInterval = null;
+        let draggedIndex = null;
+
+        // DOM Elements
+        const canvas = document.getElementById('previewCanvas');
+        const ctx = canvas.getContext('2d');
+        const fileInput = document.getElementById('fileInput');
+        const timelineEl = document.getElementById('timeline');
+        const emptyTimeline = document.getElementById('emptyTimeline');
+        const frameCounter = document.getElementById('frameCounter');
+        const timelineTitle = document.getElementById('timelineTitle');
+        const clearAllBtn = document.getElementById('clearAllBtn');
+        const exportBtn = document.getElementById('exportBtn');
+        const exportBtnContent = document.getElementById('exportBtnContent');
+        const playIcon = document.getElementById('playIcon');
+
+        // Initialize Icons
+        lucide.createIcons();
+
+        // Canvas Rendering Logic
+        function drawFrameOnCanvas(ctx, img, canvasWidth, canvasHeight, mode) {
+            const imgRatio = img.width / img.height;
+            const canvasRatio = canvasWidth / canvasHeight;
+            let drawWidth, drawHeight, offsetX, offsetY;
+
+            if (mode === 'contain') {
+                if (imgRatio > canvasRatio) {
+                    drawWidth = canvasWidth;
+                    drawHeight = canvasWidth / imgRatio;
+                } else {
+                    drawHeight = canvasHeight;
+                    drawWidth = canvasHeight * imgRatio;
+                }
+            } else { // cover
+                if (imgRatio > canvasRatio) {
+                    drawHeight = canvasHeight;
+                    drawWidth = canvasHeight * imgRatio;
+                } else {
+                    drawWidth = canvasWidth;
+                    drawHeight = canvasWidth / imgRatio;
+                }
+            }
+
+            offsetX = (canvasWidth - drawWidth) / 2;
+            offsetY = (canvasHeight - drawHeight) / 2;
+
+            ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+        }
+
+        function updateCanvasPreview() {
+            const [resW, resH] = resolution.split('x').map(Number);
+            if (canvas.width !== resW) canvas.width = resW;
+            if (canvas.height !== resH) canvas.height = resH;
+
+            ctx.fillStyle = '#0f172a'; // Background slate-900
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (frames.length > 0 && frames[currentFrameIndex]) {
+                const frame = frames[currentFrameIndex];
+                drawFrameOnCanvas(ctx, frame.imgElement, canvas.width, canvas.height, fitMode);
+                
+                frameCounter.textContent = `${currentFrameIndex + 1} / ${frames.length}`;
+                frameCounter.classList.remove('hidden');
+            } else {
+                ctx.fillStyle = '#334155';
+                ctx.font = '24px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('Belum ada gambar. Silakan unggah.', canvas.width / 2, canvas.height / 2);
+                frameCounter.classList.add('hidden');
+            }
+
+            updateTimelineSelection();
+            updateExportButton();
+        }
+
+        // Timeline UI Logic
+        function renderTimeline() {
+            if (frames.length === 0) {
+                timelineEl.innerHTML = '';
+                timelineEl.appendChild(emptyTimeline);
+                timelineTitle.textContent = `TIMELINE FRAMES (0)`;
+                clearAllBtn.classList.add('hidden');
+                updateCanvasPreview();
+                return;
+            }
+
+            emptyTimeline.remove();
+            timelineEl.innerHTML = '';
+            timelineTitle.textContent = `TIMELINE FRAMES (${frames.length})`;
+            clearAllBtn.classList.remove('hidden');
+
+            frames.forEach((frame, index) => {
+                const frameDiv = document.createElement('div');
+                frameDiv.className = `relative shrink-0 w-24 h-24 rounded-lg overflow-hidden cursor-pointer group select-none transition-all duration-200 border-2 border-slate-600 hover:border-slate-400`;
+                frameDiv.draggable = true;
+                frameDiv.dataset.index = index;
+
+                // Drag Events
+                frameDiv.addEventListener('dragstart', (e) => {
+                    draggedIndex = index;
+                    frameDiv.classList.add('dragging');
+                    e.dataTransfer.effectAllowed = "move";
+                });
+                
+                frameDiv.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                });
+                
+                frameDiv.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    if (draggedIndex === null || draggedIndex === index) return;
+                    
+                    const draggedFrame = frames.splice(draggedIndex, 1)[0];
+                    frames.splice(index, 0, draggedFrame);
+                    
+                    if (currentFrameIndex === draggedIndex) {
+                        currentFrameIndex = index;
+                    }
+                    
+                    renderTimeline();
+                    updateCanvasPreview();
+                });
+                
+                frameDiv.addEventListener('dragend', () => {
+                    draggedIndex = null;
+                    frameDiv.classList.remove('dragging');
+                });
+
+                frameDiv.addEventListener('click', () => {
+                    currentFrameIndex = index;
+                    updateCanvasPreview();
+                });
+
+                frameDiv.innerHTML = `
+                    <div class="absolute inset-0 bg-slate-900 flex items-center justify-center pointer-events-none">
+                        <img src="${frame.url}" alt="Frame ${index}" class="w-full h-full object-cover" draggable="false" />
+                    </div>
+                    <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-1">
+                        <div class="flex justify-between items-start">
+                            <span class="text-[10px] font-mono bg-black/60 px-1 rounded text-white">${index + 1}</span>
+                            <button onclick="removeFrame(event, '${frame.id}')" class="text-red-400 hover:text-red-300 bg-black/60 p-1 rounded transition-colors" title="Hapus Frame">
+                                <i data-lucide="trash-2" class="w-3 h-3"></i>
+                            </button>
+                        </div>
+                        <div class="self-center text-white/50 cursor-grab active:cursor-grabbing">
+                            <i data-lucide="grip-vertical" class="w-4 h-4"></i>
+                        </div>
+                    </div>
+                `;
+                timelineEl.appendChild(frameDiv);
+            });
+            
+            lucide.createIcons();
+            updateTimelineSelection();
+        }
+
+        function updateTimelineSelection() {
+            const children = timelineEl.children;
+            for (let i = 0; i < children.length; i++) {
+                if (children[i].id === 'emptyTimeline') continue;
+                if (i === currentFrameIndex) {
+                    children[i].classList.add('active-frame');
+                    children[i].classList.replace('border-slate-600', 'border-blue-500');
+                } else {
+                    children[i].classList.remove('active-frame');
+                    children[i].classList.replace('border-blue-500', 'border-slate-600');
+                }
+            }
+        }
+
+        // File Handling
+        fileInput.addEventListener('change', async (e) => {
+            const files = Array.from(e.target.files);
+            if (!files.length) return;
+
+            for (let file of files) {
+                const url = URL.createObjectURL(file);
+                const img = new Image();
+                await new Promise((resolve, reject) => {
+                    img.onload = () => resolve();
+                    img.onerror = () => reject();
+                    img.src = url;
+                });
+                frames.push({ id: crypto.randomUUID(), url, file, imgElement: img });
+            }
+            
+            fileInput.value = ''; // Reset input
+            renderTimeline();
+            updateCanvasPreview();
+        });
+
+        function removeFrame(event, idToRemove) {
+            event.stopPropagation();
+            frames = frames.filter(f => f.id !== idToRemove);
+            if (currentFrameIndex >= frames.length) {
+                currentFrameIndex = Math.max(0, frames.length - 1);
+            }
+            renderTimeline();
+            updateCanvasPreview();
+        }
+
+        function clearAll() {
+            if (confirm('Yakin ingin menghapus semua frame?')) {
+                frames.forEach(f => URL.revokeObjectURL(f.url)); // Free memory
+                frames = [];
+                currentFrameIndex = 0;
+                stopPlay();
+                renderTimeline();
+            }
+        }
+
+        // Playback Controls
+        function togglePlay() {
+            if (frames.length === 0) return;
+            isPlaying = !isPlaying;
+            
+            if (isPlaying) {
+                playIcon.setAttribute('data-lucide', 'pause');
+                playIcon.classList.remove('ml-0.5'); // adjust padding for pause icon
+                lucide.createIcons();
+                
+                playInterval = setInterval(() => {
+                    currentFrameIndex = (currentFrameIndex + 1) % frames.length;
+                    updateCanvasPreview();
+                }, 1000 / fps);
+            } else {
+                stopPlay();
+            }
+        }
+
+        function stopPlay() {
+            isPlaying = false;
+            clearInterval(playInterval);
+            playIcon.setAttribute('data-lucide', 'play');
+            playIcon.classList.add('ml-0.5');
+            lucide.createIcons();
+        }
+
+        function skipToStart() { stopPlay(); currentFrameIndex = 0; updateCanvasPreview(); }
+        function skipToEnd() { stopPlay(); currentFrameIndex = Math.max(0, frames.length - 1); updateCanvasPreview(); }
+        
+        function updateFps(value) {
+            fps = Number(value);
+            document.getElementById('fpsDisplay').textContent = `${fps} FPS`;
+            if (isPlaying) {
+                stopPlay();
+                togglePlay();
+            }
+        }
+
+        // Settings
+        function updateSettings() {
+            resolution = document.getElementById('resolutionInput').value;
+            updateCanvasPreview();
+        }
+
+        function setFitMode(mode) {
+            fitMode = mode;
+            const containBtn = document.getElementById('fitContainBtn');
+            const coverBtn = document.getElementById('fitCoverBtn');
+            
+            if (mode === 'contain') {
+                containBtn.className = 'flex-1 py-1.5 text-sm rounded-md transition-colors bg-slate-700 text-white shadow';
+                coverBtn.className = 'flex-1 py-1.5 text-sm rounded-md transition-colors text-slate-400 hover:text-slate-200';
+            } else {
+                coverBtn.className = 'flex-1 py-1.5 text-sm rounded-md transition-colors bg-slate-700 text-white shadow';
+                containBtn.className = 'flex-1 py-1.5 text-sm rounded-md transition-colors text-slate-400 hover:text-slate-200';
+            }
+            updateCanvasPreview();
+        }
+
+        function updateExportButton() {
+            exportBtn.disabled = isExporting || frames.length === 0;
+        }
+
+        // Export MP4
+        async function exportVideo() {
+            if (frames.length === 0) return alert('Silakan tambahkan gambar terlebih dahulu.');
+            if (!window.Mp4Muxer) return alert('Library pemroses video sedang dimuat, coba beberapa saat lagi.');
+            if (typeof VideoEncoder === 'undefined') return alert('Browser Anda tidak mendukung WebCodecs API. Gunakan Chrome, Edge, atau Opera versi terbaru desktop.');
+
+            stopPlay();
+            isExporting = true;
+            updateExportButton();
+
+            try {
+                const [width, height] = resolution.split('x').map(Number);
+                
+                // Initialize Muxer
+                let muxer = new window.Mp4Muxer.Muxer({
+                    target: new window.Mp4Muxer.ArrayBufferTarget(),
+                    video: { codec: 'avc', width, height },
+                    fastStart: 'in-memory',
+                });
+
+                // Initialize Encoder
+                let videoEncoder = new VideoEncoder({
+                    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+                    error: (e) => console.error('Video Encoder Error:', e),
+                });
+
+                // Configure AVC (H.264) Profile for high quality
+                videoEncoder.configure({
+                    codec: 'avc1.640028', // High Profile
+                    width,
+                    height,
+                    bitrate: 8_000_000, // 8 Mbps
+                    framerate: fps,
+                });
+
+                const offscreenCanvas = document.createElement('canvas');
+                offscreenCanvas.width = width;
+                offscreenCanvas.height = height;
+                const offCtx = offscreenCanvas.getContext('2d');
+
+                const frameDurationMicroseconds = 1_000_000 / fps;
+
+                for (let i = 0; i < frames.length; i++) {
+                    const frame = frames[i];
+
+                    // Draw Frame
+                    offCtx.fillStyle = '#0f172a';
+                    offCtx.fillRect(0, 0, width, height);
+                    drawFrameOnCanvas(offCtx, frame.imgElement, width, height, fitMode);
+
+                    // Encode Frame
+                    const videoFrame = new VideoFrame(offscreenCanvas, {
+                        timestamp: i * frameDurationMicroseconds,
+                        duration: frameDurationMicroseconds
+                    });
+
+                    // Add a keyframe every 2 seconds
+                    const keyFrame = (i % (fps * 2)) === 0;
+                    videoEncoder.encode(videoFrame, { keyFrame });
+                    videoFrame.close();
+
+                    // Update progress UI
+                    const progress = Math.round(((i + 1) / frames.length) * 100);
+                    exportBtnContent.innerHTML = `<div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Memproses ${progress}%`;
+                    
+                    // Small delay to prevent blocking the UI thread completely
+                    if (i % 10 === 0) await new Promise(r => setTimeout(r, 10)); 
+                }
+
+                await videoEncoder.flush();
+                muxer.finalize();
+
+                const buffer = muxer.target.buffer;
+                const blob = new Blob([buffer], { type: 'video/mp4' });
+                const url = URL.createObjectURL(blob);
+
+                // Trigger Download
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `stopmotion-${Date.now()}.mp4`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+            } catch (err) {
+                console.error(err);
+                alert('Terjadi kesalahan saat mengekspor: ' + err.message);
+            } finally {
+                isExporting = false;
+                exportBtnContent.innerHTML = `<i data-lucide="download" class="w-4 h-4"></i> Ekspor .MP4`;
+                lucide.createIcons();
+                updateExportButton();
+            }
+        }
+
+        // Init
+        updateCanvasPreview();
+    </script>
+</body>
+</html>
